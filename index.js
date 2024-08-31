@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
 
 const app = express();
@@ -12,15 +12,14 @@ app.use(cors({
     methods: ['GET', 'POST', 'DELETE'], // Allowed methods
 }));
 
-// Caminho para o arquivo de IDs válidos
 const filePath = path.join(__dirname, 'validIDs.json');
 let validIDs = [];
 
 // Função para ler os IDs do arquivo
-const loadValidIDs = () => {
+const loadValidIDs = async () => {
     try {
-        if (fs.existsSync(filePath)) {
-            const data = fs.readFileSync(filePath, 'utf8');
+        if (await fs.access(filePath)) {
+            const data = await fs.readFile(filePath, 'utf8');
             validIDs = JSON.parse(data);
         }
     } catch (error) {
@@ -30,9 +29,9 @@ const loadValidIDs = () => {
 };
 
 // Função para salvar os IDs no arquivo
-const saveValidIDs = () => {
+const saveValidIDs = async () => {
     try {
-        fs.writeFileSync(filePath, JSON.stringify(validIDs, null, 2));
+        await fs.writeFile(filePath, JSON.stringify(validIDs, null, 2));
     } catch (error) {
         console.error('Erro ao salvar o arquivo de IDs:', error);
     }
@@ -45,19 +44,19 @@ loadValidIDs();
 const isValidID = (id) => /^[a-zA-Z0-9]{11}$/.test(id);
 
 // Rota para listar os IDs válidos
-app.get('/listid', (req, res) => {
+app.get('/listid', async (req, res) => {
     res.json(validIDs);
 });
 
 // Rota para adicionar um ID
-app.post('/addid', (req, res) => {
+app.post('/addid', async (req, res) => {
     const { id } = req.body;
     if (!isValidID(id)) {
         return res.status(400).json({ message: 'Formato de ID inválido' });
     }
     if (!validIDs.includes(id)) {
         validIDs.push(id);
-        saveValidIDs();
+        await saveValidIDs();
         res.status(201).json({ message: 'ID adicionado com sucesso' });
     } else {
         res.status(400).json({ message: 'ID já existe' });
@@ -65,31 +64,28 @@ app.post('/addid', (req, res) => {
 });
 
 // Rota para deletar um ID
-app.delete('/deleteid/:id', (req, res) => {
+app.delete('/deleteid/:id', async (req, res) => {
     const { id } = req.params;
     if (!validIDs.includes(id)) {
         return res.status(404).json({ message: 'ID não encontrado' });
     }
     validIDs = validIDs.filter(validID => validID !== id);
-    saveValidIDs();
+    await saveValidIDs();
     res.status(200).json({ message: 'ID deletado com sucesso' });
 });
 
 // Rota para salvar os dados do formulário
-app.post('/save-form/:id', (req, res) => {
+app.post('/save-form/:id', async (req, res) => {
     const { id } = req.params;
 
-    // Verifica se o ID é válido
     if (!validIDs.includes(id)) {
         return res.status(400).json({ message: 'ID inválido' });
     }
 
-    // Caminho para o arquivo onde os dados serão salvos
     const formFilePath = path.join(__dirname, `formData-${id}.json`);
 
-    // Salva os dados do formulário no arquivo JSON
     try {
-        fs.writeFileSync(formFilePath, JSON.stringify(req.body, null, 2));
+        await fs.writeFile(formFilePath, JSON.stringify(req.body, null, 2));
         res.status(201).json({ message: 'Formulário salvo com sucesso' });
     } catch (error) {
         console.error('Erro ao salvar os dados do formulário:', error);
@@ -98,25 +94,44 @@ app.post('/save-form/:id', (req, res) => {
 });
 
 // Rota para verificar se o formulário já foi enviado para um ID
-app.get('/form-status/:id', (req, res) => {
+app.get('/form-status/:id', async (req, res) => {
     const { id } = req.params;
 
-    // Verifica se o ID é válido
     if (!validIDs.includes(id)) {
         return res.status(400).json({ message: 'ID inválido' });
     }
 
-    // Caminho para o arquivo onde os dados do formulário deveriam estar
     const formFilePath = path.join(__dirname, `formData-${id}.json`);
 
-    // Verifica se o arquivo existe
-    fs.access(formFilePath, fs.constants.F_OK, (err) => {
-        if (err) {
-            res.status(200).json({ formExists: false });
+    try {
+        await fs.access(formFilePath);
+        res.status(200).json({ formExists: true });
+    } catch {
+        res.status(200).json({ formExists: false });
+    }
+});
+
+// Rota para obter os dados do formulário
+app.get('/form-data/:id', async (req, res) => {
+    const { id } = req.params;
+
+    if (!validIDs.includes(id)) {
+        return res.status(400).json({ message: 'ID inválido' });
+    }
+
+    const formFilePath = path.join(__dirname, `formData-${id}.json`);
+
+    try {
+        const data = await fs.readFile(formFilePath, 'utf8');
+        res.status(200).json(JSON.parse(data));
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            res.status(404).json({ message: 'Dados do formulário não encontrados' });
         } else {
-            res.status(200).json({ formExists: true });
+            console.error('Erro ao ler os dados do formulário:', error);
+            res.status(500).json({ message: 'Erro ao ler os dados do formulário' });
         }
-    });
+    }
 });
 
 // Middleware para rotas não encontradas
@@ -130,7 +145,6 @@ app.use((err, req, res, next) => {
     res.status(500).json({ message: 'Algo deu errado!' });
 });
 
-// Inicializar o servidor na porta especificada
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
